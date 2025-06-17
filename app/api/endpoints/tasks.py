@@ -4,13 +4,10 @@
 # Date: 2025-06-16
 # Version: 0.1.0
 
-# mcp_service/app/api/endpoints/tasks.py
-
-# mcp_service/app/api/endpoints/tasks.py
-
 import os
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel.ext.asyncio.session import AsyncSession
+from sqlmodel import select # Import select for the final query
 
 from app.core.settings import settings
 from app.db import models
@@ -74,10 +71,13 @@ async def create_batch_task(
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail="Database operation failed.")
+        
+    # Keep the created task ID before any potential session issues
+    final_task_id = db_batch_task.id
 
     # Step 4: Trigger launcher task
     try:
-        launch_main_workflow.delay(db_batch_task.id)
+        launch_main_workflow.delay(final_task_id)
         logger.success(f"Successfully dispatched launcher task for batch_id: {db_batch_task.batch_id}")
         
         db_batch_task.status = models.BatchStatus.PROCESSING
@@ -91,6 +91,11 @@ async def create_batch_task(
         await db.commit()
         raise HTTPException(status_code=500, detail="Failed to dispatch background workflow.")
 
-    final_task_for_response = await db.get(models.BatchTask, db_batch_task.id)
 
-    return final_task_for_response
+    query = select(models.BatchTask).where(models.BatchTask.id == final_task_id)
+    result = await db.execute(query)
+    final_db_task = result.scalar_one()
+    
+    response_data = schemas.BatchTaskRead.from_orm(final_db_task)
+
+    return response_data
