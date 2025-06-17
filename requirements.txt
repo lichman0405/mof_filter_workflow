@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+pydantic-settings
+python-dotenv
+sqlmodel
+sqlalchemy
+asyncpg         # Driver for PostgreSQL (production)
+aiosqlite       # Driver for SQLite (local development)
+celery
+redis           # Python client for Redis broker
+httpx           # For making async requests to worker microservices
+openai          # Official library for interacting with LLM APIs
+rich

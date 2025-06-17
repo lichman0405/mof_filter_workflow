@@ -1,0 +1,45 @@
+# --- Bytecode and Caches ---
+# Python generated files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# --- Virtual Environments ---
+# Common names for virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+VENV/
+
+# --- Database Files ---
+# Our local SQLite database
+mcp.db
+*.sqlite
+*.sqlite3
+
+# --- Sensitive Configuration ---
+# Never commit the .env file containing API keys and secrets!
+.env
+
+# --- Application Data ---
+# The directory where all task-related files are stored
+data/
+/data/mcp_tasks/
+
+# --- IDE and Editor Directories ---
+# VSCode, PyCharm, etc.
+.vscode/
+.idea/
+
+# --- Celery Files ---
+# Celery beat schedule file
+celerybeat-schedule.db
+
+# --- Operating System Files ---
+# macOS
+.DS_Store
+# Windows
+Thumbs.db

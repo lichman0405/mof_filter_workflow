@@ -1,0 +1,80 @@
+services:
+  # 1. API service (FastAPI)
+  api:
+    build: .  
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload # start FastAPI app with live reload
+    image: mcp_api:latest # Image name
+    container_name: mof-mcp # container name
+    volumes:
+      - .:/app  # mount to the local directory for live reload
+    ports:
+      - "3456:8000" # project port mapping from 8000 in container to 3456 on host
+    env_file:
+      - .env  
+    depends_on: 
+      - redis
+      - db
+    networks:
+      - mcp_network
+
+  # 2. Celery worker (Worker)
+  worker:
+    build: .
+    command: celery -A worker.celery_app worker --loglevel=info -P solo # start Celery worker
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    depends_on:
+      - redis
+      - db
+    networks:
+      - mcp_network
+
+  # 3. Celery beat (定时调度器)
+  beat:
+    build: .
+    command: celery -A worker.celery_app beat --loglevel=info # start Celery beat
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    depends_on:
+      - redis
+      - db
+    networks:
+      - mcp_network
+
+
+  # PostgreSQL
+  db:
+    image: postgres:15-alpine # db image
+    container_name: mcp_db # container name
+    restart: always # always restart the container if it stops
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/ # project data volume
+    environment:
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=mcp_db
+    ports:
+      - "5432:5432" # 方便从本地连接数据库进行调试
+    networks:
+      - mcp_network
+
+  # Redis
+  redis:
+    image: redis:alpine #
+    container_name: mof-mcp-redis # container name
+    restart: always # always restart the container if it stops
+    ports:
+      - "6379:6379"
+    networks:
+      - mcp_network
+
+networks:
+  mcp_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
