@@ -5,10 +5,10 @@ python-dotenv
 sqlmodel
 sqlalchemy
 asyncpg         # Driver for PostgreSQL (production)
-aiosqlite       # Driver for SQLite (local development)
+aiosqlite       # Driver for SQLite (local development)dp
 celery
 redis           # Python client for Redis broker
 httpx           # For making async requests to worker microservices
 openai          # Official library for interacting with LLM APIs
 rich
-psycopg2
+psycopg2-binary  # PostgreSQL adapter for Python
