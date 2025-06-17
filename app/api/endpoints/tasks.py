@@ -1,8 +1,4 @@
 # mcp_service/app/api/endpoints/tasks.py
-# The module is for managing batch screening tasks in a materials science application.
-# Author: Shibo Li
-# Date: 2025-06-16
-# Version: 0.1.0
 
 import os
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -34,8 +30,6 @@ async def create_batch_task(
     """
     logger.info(f"Received new batch task request for upload session: {task_data.upload_session_id}")
 
-
-
     # --- 1. Locate and validate the uploaded files directory on the server ---
     materials_directory = os.path.join(settings.FILE_STORAGE_PATH, task_data.upload_session_id)
     logger.info(f"Scanning server directory: {materials_directory}")
@@ -48,19 +42,13 @@ async def create_batch_task(
         raise HTTPException(status_code=400, detail=f"No .cif files found in upload session: {task_data.upload_session_id}")
     logger.info(f"Found {len(cif_files)} CIF files to process.")
 
-
-
     # --- 2. LLM Interaction ---
     llm_client = LLMClient()
     try:
-        llm_generated_rules = await llm_client.get_structured_rules_from_prompt(
-            user_prompt=task_data.filtering_prompt
-        )
+        llm_generated_rules = await llm_client.get_structured_rules_from_prompt(user_prompt=task_data.filtering_prompt)
     except Exception as e:
         logger.error(f"LLM processing failed: {e}")
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Failed to process prompt with LLM: {e}")
-
-
 
     # --- 3. Database Operations ---
     db_batch_task = models.BatchTask(
@@ -90,18 +78,28 @@ async def create_batch_task(
         await db.rollback()
         raise HTTPException(status_code=500, detail="Database operation failed.")
 
+    # --- 4. Trigger Celery Workflow (with robust error handling) ---
+    try:
+        logger.info(f"Building and dispatching Celery workflow for batch_id: {db_batch_task.batch_id}")
+        analysis_group = group(initial_analysis_task.s(sub.id) for sub in db_batch_task.sub_tasks)
+        filtering_task_signature = run_first_filtering_task.s(db_batch_task.id)
+        workflow = chain(analysis_group, filtering_task_signature)
+        workflow.apply_async()
+        
+        logger.success(f"Successfully dispatched workflow for batch_id: {db_batch_task.batch_id}")
+        
+        # If dispatch is successful, update the status to PROCESSING
+        db_batch_task.status = models.BatchStatus.PROCESSING
+        db.add(db_batch_task)
+        await db.commit()
 
-
-    # --- 4. Trigger Celery Workflow ---
-    analysis_group = group(initial_analysis_task.s(sub_task.id) for sub_task in db_batch_task.sub_tasks)
-    filtering_task_signature = run_first_filtering_task.s(db_batch_task.id)
-    workflow = chain(analysis_group, filtering_task_signature)
-    workflow.apply_async()
-    
-    logger.success(f"Successfully dispatched workflow for batch_id: {db_batch_task.batch_id}")
-    
-    db_batch_task.status = models.BatchStatus.PROCESSING
-    db.add(db_batch_task)
-    await db.commit()
+    except Exception as e:
+        # If dispatching to Celery fails, we must mark the task as FAILED.
+        logger.error(f"FATAL: Failed to dispatch Celery workflow for batch_id {db_batch_task.batch_id}. Error: {e}")
+        db_batch_task.status = models.BatchStatus.FAILED
+        db.add(db_batch_task)
+        await db.commit()
+        # Raise an exception to inform the client that something went wrong.
+        raise HTTPException(status_code=500, detail="Failed to dispatch background workflow.")
 
     return db_batch_task
