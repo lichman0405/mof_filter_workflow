@@ -12,3 +12,4 @@ httpx           # For making async requests to worker microservices
 openai          # Official library for interacting with LLM APIs
 rich
 psycopg2-binary  # PostgreSQL adapter for Python
+python-multipart  # For handling file uploads
