@@ -11,3 +11,4 @@ redis           # Python client for Redis broker
 httpx           # For making async requests to worker microservices
 openai          # Official library for interacting with LLM APIs
 rich
+psycopg2-binary

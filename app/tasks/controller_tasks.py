@@ -1,56 +1,56 @@
 # mcp_service/app/tasks/controller_tasks.py
-# The module for managing workflow control tasks in the application.
-# Author: Shibo Li
-# Date: 2025-06-17
-# Version: 0.1.0
 
-import asyncio
-from sqlmodel import select
+import psycopg2
+from sqlmodel import select, Session
+from sqlalchemy import create_engine
 from sqlalchemy.orm import selectinload
-from app.db.session import AsyncSessionLocal
+
+from app.core.settings import settings
 from app.db import models
 from app.tasks.celery_app import celery_app
 from app.tasks.analysis_tasks import run_second_filtering_task
 from app.utils.logger import logger
 
+
+sync_db_url = settings.DATABASE_URL.replace("postgresql+asyncpg", "postgresql+psycopg2").replace("sqlite+aiosqlite", "sqlite")
+sync_engine = create_engine(sync_db_url)
+
+def get_sync_session():
+    """Provides a synchronous database session."""
+    return Session(sync_engine)
+
+
 @celery_app.task
 def workflow_controller_task():
     """
     A periodic task that acts as a workflow controller.
-    It checks the status of ongoing batch tasks and triggers next steps.
+    This version uses synchronous database calls for stability within Celery.
     """
-    asyncio.run(check_and_advance_workflows())
-
-async def check_and_advance_workflows():
-    """
-    The core async logic for the workflow controller.
-    """
-    logger.info("Controller Task: Running workflow check...")
-    async with AsyncSessionLocal() as db:
+    logger.info("Controller Task: Running workflow check (sync mode)...")
+    db = get_sync_session()
+    try:
         # Find all batch tasks that are currently in a processing state
         query = select(models.BatchTask).where(
-            models.BatchTask.status.in_([
-                models.BatchStatus.PROCESSING,
-            ])
+            models.BatchTask.status.in_([models.BatchStatus.PROCESSING])
         ).options(selectinload(models.BatchTask.sub_tasks))
         
-        result = await db.execute(query)
-        active_batch_tasks = result.scalars().all()
+        active_batch_tasks = db.exec(query).all()
 
         for batch in active_batch_tasks:
-            await check_for_second_filtering(db, batch)
-            await check_for_completion(db, batch)
+            check_for_second_filtering(db, batch)
+            check_for_completion(db, batch)
+    finally:
+        db.close()
 
-async def check_for_second_filtering(db, batch: models.BatchTask):
+
+def check_for_second_filtering(db: Session, batch: models.BatchTask):
     """
-    Checks if a batch is ready for the second round of filtering.
+    Checks if a batch is ready for the second round of filtering (sync version).
     """
     sub_tasks = batch.sub_tasks
     if not sub_tasks:
         return
 
-    # Define statuses that are "stuck" waiting for the second filter
-    # and statuses that are already past this point or have failed.
     waiting_status = models.SubTaskStatus.SECOND_FILTERING
     final_statuses = {
         models.SubTaskStatus.XTB_OPTIMIZATION,
@@ -59,27 +59,23 @@ async def check_for_second_filtering(db, batch: models.BatchTask):
         models.SubTaskStatus.FAILED,
     }
     
-    # Check if every task that isn't already finished is waiting for the second filter.
-    all_ready_for_filtering = all(
+    all_ready = all(
         sub.status == waiting_status for sub in sub_tasks if sub.status not in final_statuses
     )
     
-    # And ensure that there's at least one task actually waiting.
-    is_any_task_awaiting_filter = any(
-        sub.status == waiting_status for sub in sub_tasks
-    )
+    is_any_awaiting = any(sub.status == waiting_status for sub in sub_tasks)
 
-    if all_ready_for_filtering and is_any_task_awaiting_filter:
+    if all_ready and is_any_awaiting:
         logger.success(f"Controller: Batch {batch.id} is ready for second filtering. Triggering now.")
-        # Update status to prevent re-triggering
         batch.status = models.BatchStatus.AWAITING_SECOND_FILTER
         db.add(batch)
-        await db.commit()
+        db.commit()
         run_second_filtering_task.delay(batch.id)
 
-async def check_for_completion(db, batch: models.BatchTask):
+
+def check_for_completion(db: Session, batch: models.BatchTask):
     """
-    Checks if a batch task is fully completed.
+    Checks if a batch task is fully completed (sync version).
     """
     final_statuses = {
         models.SubTaskStatus.COMPLETED,
@@ -93,4 +89,4 @@ async def check_for_completion(db, batch: models.BatchTask):
         logger.success(f"Controller: All sub-tasks for batch {batch.id} are finished. Marking batch as COMPLETED.")
         batch.status = models.BatchStatus.COMPLETED
         db.add(batch)
-        await db.commit()
+        db.commit()

@@ -43,3 +43,4 @@ celerybeat-schedule.db
 .DS_Store
 # Windows
 Thumbs.db
+test/
