@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel.ext.asyncio.session import AsyncSession
 from celery import group, chain
 
+from app.core.settings import settings
 from app.db import models
 from app.db.session import get_session
 from app.schemas import task as schemas
@@ -22,23 +23,34 @@ router = APIRouter()
     "/batch-screening-tasks",
     response_model=schemas.BatchTaskRead,
     status_code=status.HTTP_201_CREATED,
-    summary="Create a new batch screening task"
+    summary="Create a new batch screening task from uploaded files"
 )
 async def create_batch_task(
     task_data: schemas.TaskCreate,
     db: AsyncSession = Depends(get_session)
 ):
     """
-    Creates a new batch screening task. This involves:
-    1.  Calling an LLM to parse the filtering prompt.
-    2.  Scanning the provided directory for CIF files.
-    3.  Creating entries in the database for the batch task and all sub-tasks.
-    4.  Dispatching a Celery workflow to run analysis and then filtering.
+    Creates a new batch screening task based on a set of previously uploaded files.
     """
-    logger.info(f"Received new batch task request: '{task_data.task_name}'")
+    logger.info(f"Received new batch task request for upload session: {task_data.upload_session_id}")
 
-    # LLM client initialization and prompt processing
-    logger.info("Initializing LLM client to process filtering prompt.")
+
+
+    # --- 1. Locate and validate the uploaded files directory on the server ---
+    materials_directory = os.path.join(settings.FILE_STORAGE_PATH, task_data.upload_session_id)
+    logger.info(f"Scanning server directory: {materials_directory}")
+    
+    if not os.path.isdir(materials_directory):
+        raise HTTPException(status_code=400, detail=f"Upload session directory not found: {task_data.upload_session_id}")
+    
+    cif_files = [f for f in os.listdir(materials_directory) if f.endswith('.cif')]
+    if not cif_files:
+        raise HTTPException(status_code=400, detail=f"No .cif files found in upload session: {task_data.upload_session_id}")
+    logger.info(f"Found {len(cif_files)} CIF files to process.")
+
+
+
+    # --- 2. LLM Interaction ---
     llm_client = LLMClient()
     try:
         llm_generated_rules = await llm_client.get_structured_rules_from_prompt(
@@ -48,23 +60,14 @@ async def create_batch_task(
         logger.error(f"LLM processing failed: {e}")
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Failed to process prompt with LLM: {e}")
 
-    # cif file scanning
-    logger.info(f"Scanning directory: {task_data.materials_directory}")
-    if not os.path.isdir(task_data.materials_directory):
-        raise HTTPException(status_code=400, detail=f"Directory not found: {task_data.materials_directory}")
-    
-    cif_files = [f for f in os.listdir(task_data.materials_directory) if f.endswith('.cif')]
-    if not cif_files:
-        raise HTTPException(status_code=400, detail=f"No .cif files found in directory: {task_data.materials_directory}")
-    logger.info(f"Found {len(cif_files)} CIF files to process.")
 
-    # Database operations
-    logger.info("Creating database entries for the batch task and sub-tasks.")
+
+    # --- 3. Database Operations ---
     db_batch_task = models.BatchTask(
         task_name=task_data.task_name,
         filtering_prompt=task_data.filtering_prompt,
         llm_generated_rules=llm_generated_rules,
-        materials_directory=task_data.materials_directory,
+        materials_directory=materials_directory,
         status=models.BatchStatus.PENDING
     )
     db.add(db_batch_task)
@@ -72,7 +75,7 @@ async def create_batch_task(
     for cif_file in cif_files:
         db_sub_task = models.SubTask(
             batch_task=db_batch_task,
-            original_cif_path=os.path.join(task_data.materials_directory, cif_file),
+            original_cif_path=os.path.join(materials_directory, cif_file),
             status=models.SubTaskStatus.PENDING
         )
         db.add(db_sub_task)
@@ -85,15 +88,12 @@ async def create_batch_task(
         logger.success(f"Successfully created batch task with ID: {db_batch_task.batch_id}")
     except Exception as e:
         await db.rollback()
-        logger.error(f"Database error: Failed to create batch task. Details: {e}")
         raise HTTPException(status_code=500, detail="Database operation failed.")
 
-    # Celery workflow dispatch
-    logger.info(f"Building Celery workflow for batch_id: {db_batch_task.batch_id}")
 
-    analysis_group = group(
-        initial_analysis_task.s(sub_task.id) for sub_task in db_batch_task.sub_tasks
-    )
+
+    # --- 4. Trigger Celery Workflow ---
+    analysis_group = group(initial_analysis_task.s(sub_task.id) for sub_task in db_batch_task.sub_tasks)
     filtering_task_signature = run_first_filtering_task.s(db_batch_task.id)
     workflow = chain(analysis_group, filtering_task_signature)
     workflow.apply_async()
@@ -103,6 +103,5 @@ async def create_batch_task(
     db_batch_task.status = models.BatchStatus.PROCESSING
     db.add(db_batch_task)
     await db.commit()
-    logger.info(f"Batch task {db_batch_task.batch_id} status updated to PROCESSING.")
 
     return db_batch_task

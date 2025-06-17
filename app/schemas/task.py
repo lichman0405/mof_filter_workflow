@@ -8,26 +8,16 @@ from datetime import datetime
 # Import status enums from our database models
 from app.db.models import BatchStatus, SubTaskStatus
 
-# --- Base Schemas ---
-# These are the fundamental building blocks for other schemas.
-
 class TaskBase(BaseModel):
     """Base schema for a task, containing common fields."""
     task_name: Optional[str] = Field(None, description="An optional descriptive name for the task.")
 
-
-# --- Schemas for Creating Tasks ---
-
 class TaskCreate(TaskBase):
     """
-    Schema for the request body when creating a new batch screening task.
-    This defines the data the user must provide.
+    Schema for creating a new batch task, referencing a previous file upload session.
     """
-    materials_directory: str = Field(..., description="The absolute path to the directory containing candidate CIF files.")
+    upload_session_id: str = Field(..., description="The unique session ID returned by the /upload endpoint.")
     filtering_prompt: str = Field(..., description="The user's filtering criteria in natural language.")
-
-
-# --- Schemas for Reading/Responding with Task Data ---
 
 class SubTaskRead(BaseModel):
     """Schema for representing a single sub-task in API responses."""
@@ -37,10 +27,7 @@ class SubTaskRead(BaseModel):
     error_message: Optional[str] = None
 
     class Config:
-        # Pydantic v1 compatibility for orm_mode
-        # For Pydantic v2, this would be: model_config = {"from_attributes": True}
         orm_mode = True
-
 
 class BatchTaskRead(TaskBase):
     """
@@ -54,7 +41,6 @@ class BatchTaskRead(TaskBase):
 
     class Config:
         orm_mode = True
-
 
 class BatchTaskReadWithSubTasks(BatchTaskRead):
     """
